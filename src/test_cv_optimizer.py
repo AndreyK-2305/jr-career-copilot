@@ -15,7 +15,8 @@ from cv_optimizer import (
     load_job_description,
     generate_markdown,
     generate_html,
-    optimize_cv
+    optimize_cv,
+    MockInterviewService
 )
 
 class TestCVOptimizer(unittest.TestCase):
@@ -175,6 +176,63 @@ class TestCVOptimizer(unittest.TestCase):
         # Comprobar la existencia de estilos de impresión claves
         self.assertIn("@media print", html_output)
         self.assertIn("page-break-inside: avoid", html_output)
+
+    @patch("services.mock_interview.genai.Client")
+    def test_mock_interview_runs_with_memory_and_exports_transcript(self, mock_client_class) -> None:
+        """
+        Verifica que el simulador mantenga historial, limite preguntas y exporte la transcripcion.
+        """
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = [
+            MagicMock(text="Pregunta 1 sobre Python."),
+            MagicMock(text="Pregunta 2 sobre Unit Testing."),
+            MagicMock(text="Feedback final: buen dominio tecnico."),
+        ]
+        mock_client_class.return_value = mock_client
+
+        service = MockInterviewService(
+            self.sample_profile_data,
+            "Se busca desarrollador con Python y Unit Testing.",
+            api_key="fake_api_key",
+            max_questions=2,
+        )
+        answers = iter(["Uso Python para automatizar pruebas.", "Diseno casos unitarios con fixtures."])
+        output_lines = []
+
+        service.run_interactive(input_func=lambda _: next(answers), output_func=output_lines.append)
+
+        self.assertEqual(service.questions_asked, 2)
+        self.assertEqual(mock_client.models.generate_content.call_count, 3)
+        self.assertIn("SOLO", service.system_instruction)
+        self.assertEqual(
+            [message["role"] for message in service.messages],
+            ["user", "model", "user", "model", "user", "model"],
+        )
+        self.assertEqual(service.transcript[-1]["speaker"], "Feedback final")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            transcript_path = os.path.join(temp_dir, "interview_transcript.md")
+            saved_path = service.export_transcript(transcript_path)
+
+            self.assertTrue(os.path.exists(saved_path))
+            with open(saved_path, "r", encoding="utf-8") as transcript_file:
+                transcript = transcript_file.read()
+
+            self.assertIn("# Mock Interview Transcript", transcript)
+            self.assertIn("Pregunta 1 sobre Python.", transcript)
+            self.assertIn("Feedback final: buen dominio tecnico.", transcript)
+
+    def test_mock_interview_rejects_more_than_seven_questions(self) -> None:
+        """
+        Verifica que el servicio no permita exceder el maximo de 7 preguntas.
+        """
+        with self.assertRaises(ValueError):
+            MockInterviewService(
+                self.sample_profile_data,
+                "Se busca desarrollador con Python.",
+                api_key="fake_api_key",
+                max_questions=8,
+            )
 
     @patch("google.genai.Client")
     def test_optimize_cv_with_mock_client(self, mock_client_class) -> None:

@@ -25,6 +25,7 @@ from renderers import (
     generate_html
 )
 from optimizer import optimize_cv
+from services.mock_interview import MockInterviewService
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -62,6 +63,11 @@ def parse_arguments() -> argparse.Namespace:
         default="templates/cv_template.html",
         help="Ruta a la plantilla HTML Jinja2 (por defecto: templates/cv_template.html)."
     )
+    parser.add_argument(
+        "--mock-interview",
+        action="store_true",
+        help="Inicia un simulador interactivo de entrevista tecnica basado en el perfil y la descripcion del cargo."
+    )
     return parser.parse_args()
 
 def main() -> None:
@@ -82,6 +88,22 @@ def main() -> None:
     # 3. Cargar descripción del trabajo
     print(f"[INFO] Cargando descripción de la oferta laboral en: '{args.job}'...")
     job_description = load_job_description(args.job)
+
+    if args.mock_interview:
+        print("[INFO] Iniciando simulador interactivo de entrevista tecnica con Gemini...")
+        try:
+            mock_interview = MockInterviewService(profile, job_description)
+            mock_interview.run_interactive()
+            transcript_path = mock_interview.export_transcript()
+        except Exception as exc:
+            print("\n[ERROR] No se pudo completar el simulador de entrevista:")
+            print(exc)
+            sys.exit(1)
+
+        print("=" * 60)
+        print(f"Transcripcion exportada en: '{transcript_path}'")
+        print("=" * 60)
+        return
     
     # 4. Optimizar el CV mediante la API de Gemini
     optimized_cv = optimize_cv(profile, job_description, args.lang)
