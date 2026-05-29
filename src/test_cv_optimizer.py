@@ -16,7 +16,9 @@ from cv_optimizer import (
     generate_markdown,
     generate_html,
     optimize_cv,
-    MockInterviewService
+    MockInterviewService,
+    RobustnessJudgeService,
+    ReporteRobustez
 )
 
 class TestCVOptimizer(unittest.TestCase):
@@ -233,6 +235,75 @@ class TestCVOptimizer(unittest.TestCase):
                 api_key="fake_api_key",
                 max_questions=8,
             )
+
+    @patch("services.robustness_judge.genai.Client")
+    def test_robustness_judge_audits_and_exports_structured_report(self, mock_client_class) -> None:
+        """
+        Verifica que el juez de robustez parsea JSON estructurado y exporta el reporte.
+        """
+        mock_report_json = """{
+            "score_honestidad": 72,
+            "alucinaciones_detectadas": [
+                {
+                    "linea_cv": "optimized_skills[2]",
+                    "dato_inventado": "Pytest no aparece en el perfil original",
+                    "severidad": "media"
+                }
+            ],
+            "inconsistencias_detectadas": [],
+            "violaciones_eticas": [],
+            "comentario_auditor": "El CV es util, pero debe eliminar habilidades no soportadas.",
+            "aprobado": false
+        }"""
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = MagicMock(text=mock_report_json)
+        mock_client_class.return_value = mock_client
+
+        optimized_cv = OptimizedCV.model_validate_json(self.mock_llm_json_response)
+        service = RobustnessJudgeService(
+            self.sample_profile_data,
+            "Se busca desarrollador con Python y Unit Testing.",
+            optimized_cv,
+            api_key="fake_api_key",
+        )
+
+        report = service.audit()
+
+        self.assertIsInstance(report, ReporteRobustez)
+        self.assertEqual(report.score_honestidad, 72)
+        self.assertFalse(report.aprobado)
+        self.assertEqual(report.alucinaciones_detectadas[0].severidad, "media")
+        self.assertEqual(mock_client.models.generate_content.call_count, 1)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            markdown_path = os.path.join(temp_dir, "robustness_report.md")
+            json_path = os.path.join(temp_dir, "robustness_report.json")
+            saved_markdown, saved_json = service.export_report(report, markdown_path, json_path)
+
+            self.assertTrue(os.path.exists(saved_markdown))
+            self.assertTrue(os.path.exists(saved_json))
+            with open(saved_markdown, "r", encoding="utf-8") as report_file:
+                markdown_report = report_file.read()
+
+            self.assertIn("# Robustness Report", markdown_report)
+            self.assertIn("Pytest no aparece", markdown_report)
+            self.assertIn("Honesty score", markdown_report)
+
+    def test_robustness_report_rejects_invalid_score(self) -> None:
+        """
+        Verifica que el esquema Pydantic rechace scores fuera del rango 0-100.
+        """
+        invalid_report = """{
+            "score_honestidad": 120,
+            "alucinaciones_detectadas": [],
+            "inconsistencias_detectadas": [],
+            "violaciones_eticas": [],
+            "comentario_auditor": "Score invalido.",
+            "aprobado": false
+        }"""
+
+        with self.assertRaises(ValidationError):
+            ReporteRobustez.model_validate_json(invalid_report)
 
     @patch("google.genai.Client")
     def test_optimize_cv_with_mock_client(self, mock_client_class) -> None:

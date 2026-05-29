@@ -26,6 +26,7 @@ from renderers import (
 )
 from optimizer import optimize_cv
 from services.mock_interview import MockInterviewService
+from services.robustness_judge import RobustnessJudgeService, ReporteRobustez
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -67,6 +68,11 @@ def parse_arguments() -> argparse.Namespace:
         "--mock-interview",
         action="store_true",
         help="Inicia un simulador interactivo de entrevista tecnica basado en el perfil y la descripcion del cargo."
+    )
+    parser.add_argument(
+        "--robustness",
+        action="store_true",
+        help="Audita el CV generado para detectar alucinaciones, inconsistencias y violaciones eticas."
     )
     return parser.parse_args()
 
@@ -122,6 +128,20 @@ def main() -> None:
     # Derivar la ruta del archivo HTML reemplazando la extensión .md del output
     html_output_path = os.path.splitext(args.output)[0] + ".html"
     save_html(html_content, html_output_path)
+
+    if args.robustness:
+        print("[INFO] Ejecutando auditoria de robustez LLM-as-a-Judge...")
+        try:
+            robustness_judge = RobustnessJudgeService(profile, job_description, optimized_cv)
+            robustness_report = robustness_judge.audit()
+            markdown_report_path, json_report_path = robustness_judge.export_report(robustness_report)
+        except Exception as exc:
+            print("\n[ERROR] No se pudo completar la auditoria de robustez:")
+            print(exc)
+            sys.exit(1)
+
+        print(f"[INFO] Reporte de robustez Markdown guardado en: '{markdown_report_path}'")
+        print(f"[INFO] Reporte de robustez JSON guardado en: '{json_report_path}'")
     
     print("=" * 60)
     print("¡Proceso finalizado con éxito! Éxito en tu postulación laboral.")
